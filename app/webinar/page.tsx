@@ -35,7 +35,7 @@ export default function WebinarPage() {
   // Fetch webinar data (not hardcoded)
   useEffect(() => {
     const fetchWebinar = async () => {
-      const docRef = doc(db, "webinar", "main"); // adjust doc id as needed
+      const docRef = doc(db, "webinar", "main"); // "webinar" collection, "main" document
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
         setWebinar(docSnap.data() as WebinarData);
