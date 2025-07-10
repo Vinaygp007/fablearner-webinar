@@ -4,8 +4,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { db } from "@/lib/firebase";
 import {
   collection,
-  addDoc,
-  serverTimestamp,
+  doc,
+  getDoc,
   getDocs,
   query,
   orderBy,
@@ -15,21 +15,52 @@ type ChatMessage = {
   id: string;
   sender: string;
   message: string;
-  timestamp: number; // seconds into the video
+  timestamp: number;
+};
+
+type WebinarData = {
+  scheduledTime: string;
+  videoUrl: string;
+  videoDuration: number;
 };
 
 export default function WebinarPage() {
+  const [webinar, setWebinar] = useState<WebinarData | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [visibleMessages, setVisibleMessages] = useState<ChatMessage[]>([]);
+  const [timeSinceStart, setTimeSinceStart] = useState(0);
+  const [videoEnded, setVideoEnded] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Fetch chat messages from Firestore
+  // Fetch webinar data (not hardcoded)
+  useEffect(() => {
+    const fetchWebinar = async () => {
+      const docRef = doc(db, "webinar", "main"); // adjust doc id as needed
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setWebinar(docSnap.data() as WebinarData);
+      }
+    };
+    fetchWebinar();
+  }, []);
+
+  // Calculate time since scheduled start
+  useEffect(() => {
+    if (!webinar) return;
+    const interval = setInterval(() => {
+      const scheduled = new Date(webinar.scheduledTime);
+      const now = new Date();
+      setTimeSinceStart(
+        Math.floor((now.getTime() - scheduled.getTime()) / 1000)
+      );
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [webinar]);
+
+  // Fetch chat messages
   useEffect(() => {
     const fetchChats = async () => {
-      const q = query(
-        collection(db, "webinar_chats"),
-        orderBy("timestamp")
-      );
+      const q = query(collection(db, "webinar_chats"), orderBy("timestamp"));
       const snapshot = await getDocs(q);
       const chats: ChatMessage[] = [];
       snapshot.forEach((doc) => {
@@ -54,39 +85,66 @@ export default function WebinarPage() {
     );
   };
 
-  // Log video view
-  const handlePlay = async () => {
-    try {
-      await addDoc(collection(db, "webinar_views"), {
-        viewedAt: serverTimestamp(),
-      });
-    } catch (error) {
-      console.error("Error logging webinar view:", error);
+  // Set video to correct time on load
+  const handleLoadedMetadata = () => {
+    if (!videoRef.current || !webinar) return;
+    if (timeSinceStart < 0) {
+      videoRef.current.currentTime = 0;
+    } else if (timeSinceStart > webinar.videoDuration) {
+      videoRef.current.currentTime = webinar.videoDuration;
+      setVideoEnded(true);
+    } else {
+      videoRef.current.currentTime = timeSinceStart;
+      videoRef.current.play();
     }
   };
+
+  if (!webinar) {
+    return (
+      <div className="flex items-center justify-center min-h-screen text-2xl font-bold text-primary">
+        Loading webinar...
+      </div>
+    );
+  }
 
   return (
     <section className="min-h-screen w-full bg-gradient-to-br from-primary via-info to-secondary py-0 px-0 flex justify-center items-stretch">
       <div className="flex flex-col md:flex-row w-full max-w-7xl h-screen items-stretch m-0">
         {/* Video Section */}
         <div className="flex-[2] flex items-stretch justify-stretch">
-          <div className="w-full h-full aspect-video md:aspect-auto rounded-none md:rounded-l-2xl shadow-lg bg-black overflow-hidden">
-            <video
-              ref={videoRef}
-              controls
-              className="w-full h-full object-contain md:rounded-l-2xl rounded-none"
-              src="/webinar.mp4"
-              onPlay={handlePlay}
-              onTimeUpdate={handleTimeUpdate}
-            />
+          <div className="w-full h-full aspect-video md:aspect-auto rounded-none md:rounded-l-2xl shadow-lg bg-black overflow-hidden flex items-center justify-center">
+            {timeSinceStart < 0 ? (
+              <div className="w-full text-center text-2xl font-bold text-primary flex items-center justify-center">
+                Webinar starts in{" "}
+                {Math.abs(Math.floor(timeSinceStart / 60))} min{" "}
+                {Math.abs(timeSinceStart % 60)} sec
+              </div>
+            ) : timeSinceStart > webinar.videoDuration || videoEnded ? (
+              <div className="w-full text-center text-2xl font-bold text-primary flex items-center justify-center">
+                Webinar has ended.
+              </div>
+            ) : (
+              <video
+                ref={videoRef}
+                controls
+                className="w-full h-full object-contain md:rounded-l-2xl rounded-none"
+                src={webinar.videoUrl}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+              />
+            )}
           </div>
         </div>
         {/* Chat Section */}
         <div className="flex-1 min-w-[300px] max-w-[400px] flex-shrink-0 flex items-stretch">
           <div className="bg-white/90 rounded-none md:rounded-r-2xl shadow-lg p-6 w-full h-full flex flex-col">
-            <h2 className="text-xl font-bold text-primary mb-4 text-center">
-              Live Chat
-            </h2>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="inline-block w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
+              <h2 className="text-xl font-bold text-primary text-center flex-1">
+                Live Chat
+              </h2>
+              <span className="text-xs text-secondary font-bold">LIVE</span>
+            </div>
             <div className="flex-1 overflow-y-auto text-gray-700 space-y-2">
               {visibleMessages.length === 0 && (
                 <div className="text-center text-gray-400">
