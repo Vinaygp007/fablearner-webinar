@@ -3,13 +3,13 @@ import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+  apiKey: "AIzaSyDX5eluS4LCSvNd9dDbLvxZV9Y27UlToJY",
+  authDomain: "fablearner-3f909.firebaseapp.com",
+  projectId: "fablearner-3f909",
+  storageBucket: "fablearner-3f909.firebasestorage.app",
+  messagingSenderId: "20290802686",
+  appId: "1:20290802686:web:46d87a4332391a507726af",
+  measurementId: "G-CK9RNZJ8K6",
 };
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
