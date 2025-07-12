@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useRef, useEffect, useState } from "react";
-import { Clock, Send, Users, MessageCircle } from "lucide-react";
+import { Clock, Send, Users, MessageCircle, Loader2 } from "lucide-react";
 
 interface Comment {
   id: string;
@@ -26,7 +26,7 @@ interface WebinarLiveProps {
   userName: string;
   setNewComment: (comment: string) => void;
   setUserName: (name: string) => void;
-  handleSendComment: () => void;
+  handleSendComment: (timestamp: string) => void;
   formatISTDateTime: (utcDate: string) => string;
 }
 
@@ -50,6 +50,39 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
   const [visibleComments, setVisibleComments] = useState<Comment[]>([]);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
+  const [isVideoLoading, setIsVideoLoading] = useState(true);
+  const [videoError, setVideoError] = useState<string | null>(null);
+
+  // Extract video ID from Vimeo URL safely
+  const extractVideoId = (vimeoLink: string): string | null => {
+    if (!vimeoLink) return null;
+
+    try {
+      // Handle different Vimeo URL formats
+      const patterns = [
+        /vimeo\.com\/(\d+)/,
+        /player\.vimeo\.com\/video\/(\d+)/,
+        /vimeo\.com\/video\/(\d+)/,
+      ];
+
+      for (const pattern of patterns) {
+        const match = vimeoLink.match(pattern);
+        if (match && match[1]) {
+          return match[1];
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error("Error extracting video ID:", error);
+      return null;
+    }
+  };
+
+  // Check if webinar data is loaded and valid
+  const isWebinarLoaded =
+    webinar && webinar.vimeoLink && webinar.vimeoLink.trim() !== "";
+  const videoId = isWebinarLoaded ? extractVideoId(webinar.vimeoLink) : null;
 
   // Convert timestamp string to seconds
   const timestampToSeconds = (timestamp: string): number => {
@@ -70,16 +103,43 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
       .padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
+  // Get current video timestamp
+  const getCurrentVideoTimestamp = (): string => {
+    return secondsToTimestamp(currentVideoTime);
+  };
+
+  // Handle sending comment with current timestamp
+  const handleSendCommentWithTimestamp = () => {
+    const currentTimestamp = getCurrentVideoTimestamp();
+    handleSendComment(currentTimestamp);
+  };
+
   // Initialize Vimeo Player with proper event handling
   useEffect(() => {
-    if (!iframeRef.current) return;
+    if (!iframeRef.current || !isWebinarLoaded || !videoId) return;
 
     // Helper function to initialize player
     const initializePlayer = async () => {
       try {
+        setIsVideoLoading(true);
+        setVideoError(null);
+
         // Dynamically import Vimeo Player
         const Player = (await import("@vimeo/player")).default;
         playerRef.current = new Player(iframeRef.current!);
+
+        // Set up ready event
+        playerRef.current.on("loaded", () => {
+          setIsVideoLoading(false);
+          setIsPlayerReady(true);
+        });
+
+        // Set up error handling
+        playerRef.current.on("error", (error: any) => {
+          console.error("Vimeo player error:", error);
+          setVideoError("Failed to load video. Please try again later.");
+          setIsVideoLoading(false);
+        });
 
         // Set up time update listener
         playerRef.current.on("timeupdate", (data: { seconds: number }) => {
@@ -100,62 +160,95 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
             startTimeRef.current = 0;
           }
         });
-
-        setIsPlayerReady(true);
       } catch (error) {
         console.error("Error initializing Vimeo player:", error);
+        setVideoError("Failed to initialize video player.");
+        setIsVideoLoading(false);
       }
     };
 
     initializePlayer();
 
-    // Cleanup function - this runs when component unmounts or video closes
+    // Cleanup function
     return () => {
-      // Final time calculation before unmount
       if (startTimeRef.current) {
         const elapsed = (Date.now() - startTimeRef.current) / 1000;
         totalWatchTimeRef.current += elapsed;
       }
 
-      // Log final watch time
       console.log(
         "Final watch time:",
         totalWatchTimeRef.current.toFixed(1),
         "seconds"
       );
 
-      // Clean up player
       if (playerRef.current) {
         playerRef.current.off("timeupdate");
         playerRef.current.off("play");
         playerRef.current.off("pause");
+        playerRef.current.off("loaded");
+        playerRef.current.off("error");
       }
     };
-  }, []);
+  }, [isWebinarLoaded, videoId]);
 
-  // Filter comments based on current video time (only when video is playing)
   useEffect(() => {
-    console.log(comments);
-    const currentTimeInSeconds = Math.floor(currentVideoTime);
+    // Helper function to convert timestamp to seconds
+    interface ConvertToSeconds {
+      (timestamp: string | number | undefined): number;
+    }
+
+    const convertToSeconds: ConvertToSeconds = (timestamp) => {
+      if (!timestamp) return 0;
+
+      if (typeof timestamp === "number") return timestamp;
+
+      if (typeof timestamp === "string") {
+        const parts = timestamp.split(":");
+        if (parts.length === 2) {
+          const minutes: number = parseInt(parts[0], 10) || 0;
+          const seconds: number = parseInt(parts[1], 10) || 0;
+          return minutes * 60 + seconds;
+        } else if (parts.length === 3) {
+          const hours: number = parseInt(parts[0], 10) || 0;
+          const minutes: number = parseInt(parts[1], 10) || 0;
+          const seconds: number = parseInt(parts[2], 10) || 0;
+          return hours * 3600 + minutes * 60 + seconds;
+        }
+      }
+
+      return 0;
+    };
+
+    const currentTimeInSeconds = Math.floor(Number(currentVideoTime) || 0);
+
     const newVisibleComments = comments.filter((comment) => {
-      const commentTimeInSeconds = timestampToSeconds(comment.timestamp);
-      // Show comments that have timestamps less than or equal to current time
+      const commentTimeInSeconds = convertToSeconds(comment.timestamp);
+
+      if (isNaN(commentTimeInSeconds) || isNaN(currentTimeInSeconds)) {
+        console.warn("Invalid timestamp detected:", {
+          original: comment.timestamp,
+          converted: commentTimeInSeconds,
+          currentTime: currentTimeInSeconds,
+        });
+        return false;
+      }
+
       return commentTimeInSeconds <= currentTimeInSeconds;
     });
 
-    // Sort by timestamp to maintain chronological order
-    newVisibleComments.sort(
-      (a, b) =>
-        timestampToSeconds(a.timestamp) - timestampToSeconds(b.timestamp)
-    );
+    newVisibleComments.sort((a, b) => {
+      const timeA = convertToSeconds(a.timestamp);
+      const timeB = convertToSeconds(b.timestamp);
+      return timeA - timeB;
+    });
 
-    // Only update if there are actually changes
     if (
       JSON.stringify(visibleComments) !== JSON.stringify(newVisibleComments)
     ) {
       setVisibleComments(newVisibleComments);
     }
-  }, [currentVideoTime]); // Remove isVideoPlaying from dependencies
+  }, [currentVideoTime, comments]);
 
   // Auto-scroll chat when new comments appear
   useEffect(() => {
@@ -164,11 +257,31 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
     }
   }, [visibleComments]);
 
-  // Extract video ID from Vimeo URL for iframe src
-  const getVimeoEmbedUrl = (vimeoLink: string): string => {
-    const videoId = vimeoLink.match(/vimeo\.com\/(\d+)/)?.[1];
-    return `https://player.vimeo.com/video/${videoId}?api=1&controls=1&sidedock=0&title=0&byline=0&portrait=0&badge=0&autoplay=1&muted=0`;
-  };
+  // Show loading state if webinar data is not loaded
+  if (!isWebinarLoaded) {
+    return (
+      <section className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-blue-600" />
+          <p className="text-gray-600">Loading webinar...</p>
+        </div>
+      </section>
+    );
+  }
+
+  // Show error state if video ID couldn't be extracted
+  if (!videoId) {
+    return (
+      <section className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-red-600 mb-4">Invalid video URL</p>
+          <p className="text-gray-600">
+            Please check the webinar configuration.
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="min-h-screen bg-gray-50">
@@ -189,6 +302,9 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
             </span>
             <span className="bg-red-500 text-white px-2 py-1 rounded-full text-xs font-medium">
               {isVideoPlaying ? "LIVE NOW" : "PAUSED"}
+            </span>
+            <span className="bg-blue-500 text-white px-2 py-1 rounded-full text-xs font-medium">
+              {getCurrentVideoTimestamp()}
             </span>
           </div>
         </div>
@@ -212,39 +328,38 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
                   </span>
                 </div>
 
-                <iframe
-                  ref={iframeRef}
-                  src={`https://player.vimeo.com/video/${webinar.vimeoLink
-                    .split("/")
-                    .pop()}?api=1&controls=0&sidedock=0&title=0&byline=0&portrait=0&badge=0&autoplay=1`}
-                  width="100%"
-                  height="400"
-                  frameBorder="0"
-                  allow="autoplay; fullscreen; picture-in-picture"
-                  allowFullScreen
-                  className="w-full h-96"
-                ></iframe>
-              </div>
+                {/* Video Loading State */}
+                {isVideoLoading && (
+                  <div className="absolute inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-20">
+                    <div className="text-center text-white">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
+                      <p className="text-sm">Loading video...</p>
+                    </div>
+                  </div>
+                )}
 
-              {/* Video Controls Info */}
-              <div className="p-4 bg-gray-50 border-t">
-                <div className="flex items-center justify-between text-sm text-gray-600">
-                  <span>
-                    Current Time: {secondsToTimestamp(currentVideoTime)}
-                  </span>
-                  <span>
-                    Watch Time: {totalWatchTimeRef.current.toFixed(1)}s
-                  </span>
-                  <span
-                    className={`px-2 py-1 rounded text-xs ${
-                      isVideoPlaying
-                        ? "bg-green-100 text-green-800"
-                        : "bg-gray-100 text-gray-800"
-                    }`}
-                  >
-                    {isVideoPlaying ? "Playing" : "Paused"}
-                  </span>
-                </div>
+                {/* Video Error State */}
+                {videoError && (
+                  <div className="absolute inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-20">
+                    <div className="text-center text-white">
+                      <p className="text-sm text-red-400">{videoError}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Vimeo iframe - only render when video ID is available */}
+                {videoId && (
+                  <iframe
+                    ref={iframeRef}
+                    src={`${webinar.vimeoLink}&autoplay=1&loop=1&muted=0&controls=0&title=0&byline=0&portrait=0&badge=0&background=0`}
+                    width="100%"
+                    height="400"
+                    frameBorder="0"
+                    allow="autoplay; fullscreen; picture-in-picture"
+                    allowFullScreen
+                    className="w-full h-96"
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -256,12 +371,8 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
               <div className="p-4 border-b bg-gray-50 rounded-t-lg">
                 <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                   <MessageCircle className="w-5 h-5" />
-                  Time-Synced Chat ({visibleComments.length}/{comments.length})
+                  Live Chat
                 </h3>
-                <div className="text-xs text-gray-500 mt-1">
-                  Video: {secondsToTimestamp(currentVideoTime)} •{" "}
-                  {isVideoPlaying ? "Playing" : "Paused"}
-                </div>
               </div>
 
               {/* Chat Messages */}
@@ -269,8 +380,8 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
                 {visibleComments.length === 0 ? (
                   <div className="text-center text-gray-500 text-sm py-8">
                     {isVideoPlaying
-                      ? "Comments will appear as the video progresses..."
-                      : "Play the video to see time-synced comments"}
+                      ? "Comments will appear as the Live progresses..."
+                      : "No comments yet..."}
                   </div>
                 ) : (
                   visibleComments.map((comment: Comment) => (
@@ -304,50 +415,50 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
               {/* Chat Input */}
               <div className="p-4 border-t bg-gray-50">
                 {!userName ? (
-                  <div className="space-y-2">
+                  <div className="space-y-4">
                     <input
                       type="text"
-                      placeholder="Enter your name to join chat..."
+                      placeholder="Enter your name to join the chat..."
                       value={userName}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                        setUserName(e.target.value)
-                      }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                      onChange={(e) => setUserName(e.target.value)}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base text-black"
                     />
                     <button
                       onClick={() => setUserName(userName)}
                       disabled={!userName.trim()}
-                      className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                      className={`w-full py-3 px-4 rounded-lg text-base font-medium transition-colors ${
+                        !userName.trim()
+                          ? "bg-blue-300 cursor-not-allowed"
+                          : "bg-blue-600 hover:bg-blue-700 text-white"
+                      }`}
                     >
                       Join Chat
                     </button>
                   </div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-4">
                     <div className="flex gap-2">
                       <input
                         type="text"
                         placeholder="Type your message..."
                         value={newComment}
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                          setNewComment(e.target.value)
+                        onChange={(e) => setNewComment(e.target.value)}
+                        onKeyPress={(e) =>
+                          e.key === "Enter" && handleSendCommentWithTimestamp()
                         }
-                        onKeyPress={(
-                          e: React.KeyboardEvent<HTMLInputElement>
-                        ) => e.key === "Enter" && handleSendComment()}
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                        className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base text-black"
                       />
                       <button
-                        onClick={handleSendComment}
+                        onClick={handleSendCommentWithTimestamp}
                         disabled={!newComment.trim()}
-                        className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className={`py-3 px-4 rounded-lg transition-colors ${
+                          !newComment.trim()
+                            ? "bg-blue-300 cursor-not-allowed"
+                            : "bg-blue-600 hover:bg-blue-700 text-white"
+                        }`}
                       >
-                        <Send className="w-4 h-4" />
+                        <Send className="w-5 h-5" />
                       </button>
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      Comment will be timestamped at:{" "}
-                      {secondsToTimestamp(currentVideoTime)}
                     </div>
                   </div>
                 )}

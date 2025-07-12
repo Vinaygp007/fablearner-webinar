@@ -14,6 +14,7 @@ import {
   serverTimestamp,
   onSnapshot,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { WebinarTimer } from "@/component/section/WebinarTimer";
 import { WebinarLive } from "@/component/section/WebinarLive";
@@ -49,9 +50,20 @@ interface Comment {
   createdAt: string;
 }
 
+interface PendingComment {
+  id: string;
+  name: string;
+  comment: string;
+  timestamp: string;
+  messageIndex: number;
+  createdAt: string;
+}
+
 export default function WebinarPage(): JSX.Element {
   const [webinar, setWebinar] = useState<WebinarData | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
+  const [pendingComments, setPendingComments] = useState<PendingComment[]>([]);
+  const [allComments, setAllComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState<string>("");
   const [userName, setUserName] = useState<string>("");
   const [isValidToken, setIsValidToken] = useState<boolean>(false);
@@ -61,9 +73,43 @@ export default function WebinarPage(): JSX.Element {
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [wasLive, setWasLive] = useState<boolean>(false);
+  const [userToken, setUserToken] = useState<string>("");
 
-  // Mock token - in real app, get from URL params or auth
-  const userToken: string = "8a3d570a-48e2-40bc-8f42-d0aaee8554ea";
+  // Add this useEffect to extract token from URL
+  useEffect(() => {
+    // Check if we're in the browser
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const token = urlParams.get("t");
+
+      if (token) {
+        setUserToken(token);
+      } else {
+        setError("No token provided in URL");
+        setLoading(false);
+      }
+    }
+  }, []);
+
+  // Update the fetchWebinars useEffect dependency array to include userToken
+  // and add a condition to only run when userToken is available:
+  useEffect(() => {
+    if (!userToken) return; // Don't run if no token yet
+
+    const fetchWebinars = async (): Promise<void> => {
+      try {
+        // ... rest of your existing fetchWebinars logic
+      } catch (err) {
+        setError("Error fetching webinar data");
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchWebinars();
+  }, [userToken]);
 
   // Helper functions
   const getISTTime = (utcDate: string): Date => {
@@ -115,18 +161,70 @@ export default function WebinarPage(): JSX.Element {
       .padStart(2, "0")}`;
   };
 
-  const handleSendComment = async (): Promise<void> => {
+  // Sync pending comments to Firebase when live session ends
+  const syncPendingCommentsToFirebase = async (): Promise<void> => {
+    if (!webinar || pendingComments.length === 0) return;
+
+    try {
+      const batch = writeBatch(db);
+      const commentsRef = collection(db, "webinar", webinar.id, "comments");
+
+      console.log(
+        `Syncing ${pendingComments.length} pending comments to Firebase...`
+      );
+
+      pendingComments.forEach((comment) => {
+        const docRef = doc(commentsRef);
+        batch.set(docRef, {
+          name: comment.name,
+          comment: comment.comment,
+          timestamp: comment.timestamp,
+          messageIndex: comment.messageIndex,
+          createdAt: comment.createdAt,
+        });
+      });
+
+      await batch.commit();
+      console.log("All pending comments synced to Firebase successfully!");
+
+      // Clear pending comments after successful sync
+      setPendingComments([]);
+    } catch (err) {
+      console.error("Error syncing pending comments to Firebase:", err);
+    }
+  };
+
+  // Handle sending comment with timestamp
+  const handleSendComment = async (timestamp: string): Promise<void> => {
     if (!newComment.trim() || !userName.trim() || !webinar) return;
 
     try {
-      const commentsRef = collection(db, "webinar", webinar.id, "comments");
-      await addDoc(commentsRef, {
+      const commentData: PendingComment = {
+        id: `pending-${Date.now()}-${Math.random()}`,
         name: userName,
         comment: newComment,
-        timestamp: getCurrentVideoTime(),
-        messageIndex: comments.length,
+        timestamp: timestamp,
+        messageIndex: allComments.length,
         createdAt: new Date().toISOString(),
-      });
+      };
+
+      if (isLive) {
+        // During live session, add to pending comments and local state
+        setPendingComments((prev) => [...prev, commentData]);
+        setAllComments((prev) => [...prev, commentData as Comment]);
+        console.log("Comment added to pending queue:", commentData);
+      } else {
+        // If not live, directly add to Firebase
+        const commentsRef = collection(db, "webinar", webinar.id, "comments");
+        await addDoc(commentsRef, {
+          name: commentData.name,
+          comment: commentData.comment,
+          timestamp: commentData.timestamp,
+          messageIndex: commentData.messageIndex,
+          createdAt: commentData.createdAt,
+        });
+        console.log("Comment added directly to Firebase:", commentData);
+      }
 
       setNewComment("");
     } catch (err) {
@@ -134,7 +232,31 @@ export default function WebinarPage(): JSX.Element {
     }
   };
 
-  // All your existing useEffect hooks remain the same...
+  // Update allComments when comments or pendingComments change
+  useEffect(() => {
+    const combined = [...comments, ...pendingComments];
+    combined.sort((a, b) => a.messageIndex - b.messageIndex);
+    setAllComments(combined);
+  }, [comments, pendingComments]);
+
+  // Monitor live state changes and sync when live ends
+  useEffect(() => {
+    if (wasLive && !isLive) {
+      // Live session just ended, sync pending comments
+      syncPendingCommentsToFirebase();
+    }
+    setWasLive(isLive);
+  }, [isLive, wasLive]);
+
+  // Cleanup: sync pending comments when component unmounts
+  useEffect(() => {
+    return () => {
+      if (pendingComments.length > 0) {
+        syncPendingCommentsToFirebase();
+      }
+    };
+  }, [pendingComments]);
+
   useEffect(() => {
     const fetchWebinars = async (): Promise<void> => {
       try {
@@ -213,7 +335,7 @@ export default function WebinarPage(): JSX.Element {
     fetchWebinars();
   }, [userToken]);
 
-  // Real-time comments listener
+  // Real-time comments listener (only for Firebase comments)
   useEffect(() => {
     if (!webinar || !isValidToken) return;
 
@@ -281,12 +403,12 @@ export default function WebinarPage(): JSX.Element {
     return (
       <WebinarLive
         webinar={webinar}
-        comments={comments}
+        comments={allComments} // Pass combined comments (Firebase + pending)
         newComment={newComment}
         userName={userName}
         setNewComment={setNewComment}
         setUserName={setUserName}
-        handleSendComment={handleSendComment}
+        handleSendComment={handleSendComment} // Now accepts timestamp
         formatISTDateTime={formatISTDateTime}
       />
     );
