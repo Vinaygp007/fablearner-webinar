@@ -351,7 +351,7 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
                 {videoId && (
                   <iframe
                     ref={iframeRef}
-                    src={`${webinar.vimeoLink}&autoplay=1&loop=1&muted=0&controls=0&title=0&byline=0&portrait=0&badge=0&background=0`}
+                    src={`${webinar.vimeoLink}?autoplay=1&loop=1&muted=0&controls=0&title=0&byline=0&portrait=0&badge=0&background=0`}
                     width="100%"
                     height="400"
                     frameBorder="0"

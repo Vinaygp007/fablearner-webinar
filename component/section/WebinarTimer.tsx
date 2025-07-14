@@ -20,7 +20,7 @@ export const WebinarTimer: React.FC<WebinarTimerProps> = ({
   formatISTDateTime,
 }) => {
   return (
-    <section className="min-h-screen bg-gray-50">
+    <section className="min-h-screen h-screen w-full bg-gray-50 flex items-center justify-center px-4">
       <div className="max-w-7xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="mb-6">
@@ -32,7 +32,7 @@ export const WebinarTimer: React.FC<WebinarTimerProps> = ({
               <Clock className="w-4 h-4" />
               {formatISTDateTime(webinar.date)} (IST)
             </span>
-            <span className="bg-blue-500 text-white px-2 py-1 rounded-full text-xs font-medium">
+            <span className="bg-pink-600/30 text-white px-2 py-1 rounded-full text-xs font-medium">
               UPCOMING
             </span>
           </div>

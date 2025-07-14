@@ -275,7 +275,7 @@ export default function WebinarPage(): JSX.Element {
           const timeDiff = Math.abs(
             currentISTTime.getTime() - webinarISTTime.getTime()
           );
-          return timeDiff <= 300000; // 5 minutes tolerance
+          return timeDiff <= 10000; // 5 minutes tolerance
         });
 
         const upcomingWebinar = webinars.find((w) => {
