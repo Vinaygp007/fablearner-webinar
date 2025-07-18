@@ -75,53 +75,108 @@ export default function WebinarPage(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [wasLive, setWasLive] = useState<boolean>(false);
   const [userToken, setUserToken] = useState<string>("");
+  const [webinarId, setWebinarId] = useState<string>("");
+  const [scheduledISTTime, setScheduledISTTime] = useState<Date | null>(null);
 
-  // Add this useEffect to extract token from URL
+  // Extract token and wid from URL
   useEffect(() => {
-    // Check if we're in the browser
     if (typeof window !== "undefined") {
       const urlParams = new URLSearchParams(window.location.search);
       const token = urlParams.get("t");
-
-      if (token) {
+      const wid = urlParams.get("wid");
+      if (token && wid) {
         setUserToken(token);
+        setWebinarId(wid);
       } else {
-        setError("No token provided in URL");
+        setError("Missing token or webinar ID in URL");
         setLoading(false);
       }
     }
   }, []);
 
-  // Update the fetchWebinars useEffect dependency array to include userToken
-  // and add a condition to only run when userToken is available:
+  // Fetch webinar by ID and check token
   useEffect(() => {
-    if (!userToken) return; // Don't run if no token yet
-
-    const fetchWebinars = async (): Promise<void> => {
+    if (!userToken || !webinarId) return;
+    const fetchWebinar = async (): Promise<void> => {
       try {
-        // ... rest of your existing fetchWebinars logic
+        const webinarRef = doc(db, "webinar", webinarId);
+        const webinarSnap = await getDoc(webinarRef);
+        if (!webinarSnap.exists()) {
+          setError("Webinar not found");
+          setLoading(false);
+          return;
+        }
+        const w = { id: webinarSnap.id, ...webinarSnap.data() } as WebinarData;
+        // Check token
+        let validToken = false;
+        if (w.userLinks && Array.isArray(w.userLinks)) {
+          validToken = w.userLinks.some(
+            (link: UserLink) => link.token === userToken
+          );
+        } else if (w.userLinks && typeof w.userLinks === "object") {
+          validToken = Object.values(w.userLinks).some(
+            (link: any) => link.token === userToken
+          );
+        }
+        setIsValidToken(validToken);
+        setWebinar(w);
+        // Determine scheduled IST time
+        let scheduledDate: Date;
+        if (w.scheduleType === "custom" && w.date) {
+          scheduledDate = getISTTime(w.date);
+        } else if (
+          (w.scheduleType === "saturday" || w.scheduleType === "sunday") &&
+          !w.date
+        ) {
+          // Compute next Saturday or Sunday at 6:00 PM IST
+          const now = getCurrentISTTime();
+          let targetDay = w.scheduleType === "saturday" ? 6 : 0; // 0=Sun, 6=Sat
+          let daysToAdd = (targetDay - now.getDay() + 7) % 7;
+          if (daysToAdd === 0 && now.getHours() >= 18) {
+            daysToAdd = 7; // If today is the day but past 6pm, go to next week
+          }
+          scheduledDate = new Date(now);
+          scheduledDate.setDate(now.getDate() + daysToAdd);
+          scheduledDate.setHours(18, 0, 0, 0); // 6:00 PM IST
+        } else if (w.date) {
+          scheduledDate = getISTTime(w.date);
+        } else {
+          setError("No scheduled date for this webinar");
+          setLoading(false);
+          return;
+        }
+        setScheduledISTTime(scheduledDate);
+        // Set live/upcoming state
+        const now = getCurrentISTTime();
+        if (now < scheduledDate) {
+          setIsLive(false);
+          setIsUpcoming(true);
+          setTimeUntilStart(scheduledDate.getTime() - now.getTime());
+        } else if (now >= scheduledDate) {
+          setIsLive(true);
+          setIsUpcoming(false);
+          setTimeUntilStart(null);
+        }
       } catch (err) {
         setError("Error fetching webinar data");
-        console.error(err);
+        setLoading(false);
       } finally {
         setLoading(false);
       }
     };
-
-    fetchWebinars();
-  }, [userToken]);
+    fetchWebinar();
+  }, [userToken, webinarId]);
 
   // Helper functions
   const getISTTime = (utcDate: string): Date => {
     const utcTime = new Date(utcDate);
-    const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+    const istOffset = 1000;
     return new Date(utcTime.getTime() + istOffset);
   };
 
+  // Return local time (assume system is set to IST or use as-is)
   const getCurrentISTTime = (): Date => {
-    const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
-    return new Date(now.getTime() + istOffset);
+    return new Date();
   };
 
   const formatTime = (milliseconds: number): string => {
@@ -134,8 +189,14 @@ export default function WebinarPage(): JSX.Element {
       .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   };
 
-  const formatISTDateTime = (utcDate: string): string => {
-    const istDate = getISTTime(utcDate);
+  // Update all time displays to use scheduledISTTime
+  const formatISTDateTime = (dateOrString: string | Date): string => {
+    let istDate: Date;
+    if (typeof dateOrString === "string") {
+      istDate = getISTTime(dateOrString);
+    } else {
+      istDate = dateOrString;
+    }
     return istDate.toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
       dateStyle: "medium",
@@ -144,16 +205,12 @@ export default function WebinarPage(): JSX.Element {
   };
 
   const getCurrentVideoTime = (): string => {
-    if (!webinar) return "00:00";
-
-    const webinarISTTime = getISTTime(webinar.date);
-    const currentISTTime = getCurrentISTTime();
+    if (!scheduledISTTime) return "00:00";
+    const now = getCurrentISTTime();
     const elapsed = Math.floor(
-      (currentISTTime.getTime() - webinarISTTime.getTime()) / 1000
+      (now.getTime() - scheduledISTTime.getTime()) / 1000
     );
-
     if (elapsed < 0) return "00:00";
-
     const minutes = Math.floor(elapsed / 60);
     const seconds = elapsed % 60;
     return `${minutes.toString().padStart(2, "0")}:${seconds
@@ -257,84 +314,6 @@ export default function WebinarPage(): JSX.Element {
     };
   }, [pendingComments]);
 
-  useEffect(() => {
-    const fetchWebinars = async (): Promise<void> => {
-      try {
-        const webinarsRef = collection(db, "webinar");
-        const webinarsSnapshot = await getDocs(webinarsRef);
-
-        const webinars: WebinarData[] = webinarsSnapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        })) as WebinarData[];
-
-        const currentISTTime = getCurrentISTTime();
-
-        const ongoingWebinar = webinars.find((w) => {
-          const webinarISTTime = getISTTime(w.date);
-          const timeDiff = Math.abs(
-            currentISTTime.getTime() - webinarISTTime.getTime()
-          );
-          return timeDiff <= 10000; // 5 minutes tolerance
-        });
-
-        const upcomingWebinar = webinars.find((w) => {
-          const webinarISTTime = getISTTime(w.date);
-          return webinarISTTime.getTime() > currentISTTime.getTime();
-        });
-
-        let selectedWebinar: WebinarData | null = null;
-
-        if (ongoingWebinar) {
-          selectedWebinar = ongoingWebinar;
-          setIsLive(true);
-          setIsUpcoming(false);
-        } else if (upcomingWebinar) {
-          selectedWebinar = upcomingWebinar;
-          setIsLive(false);
-          setIsUpcoming(true);
-
-          const webinarISTTime = getISTTime(upcomingWebinar.date);
-          const timeDiff = webinarISTTime.getTime() - currentISTTime.getTime();
-          setTimeUntilStart(timeDiff);
-        }
-
-        if (selectedWebinar) {
-          setWebinar(selectedWebinar);
-
-          let validToken: boolean = false;
-
-          if (
-            selectedWebinar.userLinks &&
-            Array.isArray(selectedWebinar.userLinks)
-          ) {
-            validToken = selectedWebinar.userLinks.some(
-              (link: UserLink) => link.token === userToken
-            );
-          } else if (
-            selectedWebinar.userLinks &&
-            typeof selectedWebinar.userLinks === "object"
-          ) {
-            validToken = Object.values(selectedWebinar.userLinks).some(
-              (link: any) => link.token === userToken
-            );
-          }
-
-          setIsValidToken(validToken);
-        } else {
-          setError("No webinars available at this time");
-        }
-      } catch (err) {
-        setError("Error fetching webinar data");
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchWebinars();
-  }, [userToken]);
-
   // Real-time comments listener (only for Firebase comments)
   useEffect(() => {
     if (!webinar || !isValidToken) return;
@@ -353,16 +332,13 @@ export default function WebinarPage(): JSX.Element {
     return () => unsubscribe();
   }, [webinar, isValidToken]);
 
-  // Timer update for upcoming webinars
+  // Timer update for upcoming webinars (use scheduledISTTime)
   useEffect(() => {
-    if (!timeUntilStart || !webinar || !isUpcoming) return;
-
+    if (!timeUntilStart || !webinar || !isUpcoming || !scheduledISTTime) return;
     const timer = setInterval(() => {
       setCurrentTime(getCurrentISTTime());
-      const webinarISTTime = getISTTime(webinar.date);
-      const currentISTTime = getCurrentISTTime();
-      const timeDiff = webinarISTTime.getTime() - currentISTTime.getTime();
-
+      const now = getCurrentISTTime();
+      const timeDiff = scheduledISTTime.getTime() - now.getTime();
       if (timeDiff <= 0) {
         setIsLive(true);
         setIsUpcoming(false);
@@ -371,9 +347,8 @@ export default function WebinarPage(): JSX.Element {
         setTimeUntilStart(timeDiff);
       }
     }, 1000);
-
     return () => clearInterval(timer);
-  }, [timeUntilStart, webinar, isUpcoming]);
+  }, [timeUntilStart, webinar, isUpcoming, scheduledISTTime]);
 
   // Render appropriate component based on state
   if (loading) {
@@ -388,37 +363,35 @@ export default function WebinarPage(): JSX.Element {
     return <WebinarAccessDenied />;
   }
 
-  if (isUpcoming && timeUntilStart && webinar) {
+  if (isUpcoming && timeUntilStart && webinar && scheduledISTTime) {
     return (
       <WebinarTimer
         webinar={webinar}
         timeUntilStart={timeUntilStart}
         formatTime={formatTime}
-        formatISTDateTime={formatISTDateTime}
+        formatISTDateTime={() => formatISTDateTime(scheduledISTTime)}
       />
     );
   }
-
-  if (isLive && webinar) {
+  if (isLive && webinar && scheduledISTTime) {
     return (
       <WebinarLive
         webinar={webinar}
-        comments={allComments} // Pass combined comments (Firebase + pending)
+        comments={allComments}
         newComment={newComment}
         userName={userName}
         setNewComment={setNewComment}
         setUserName={setUserName}
-        handleSendComment={handleSendComment} // Now accepts timestamp
-        formatISTDateTime={formatISTDateTime}
+        handleSendComment={handleSendComment}
+        formatISTDateTime={() => formatISTDateTime(scheduledISTTime)}
       />
     );
   }
-
-  if (webinar) {
+  if (webinar && scheduledISTTime) {
     return (
       <WebinarFinished
         webinar={webinar}
-        formatISTDateTime={formatISTDateTime}
+        formatISTDateTime={() => formatISTDateTime(scheduledISTTime)}
       />
     );
   }
