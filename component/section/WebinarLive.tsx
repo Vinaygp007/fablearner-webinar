@@ -283,6 +283,18 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
     );
   }
 
+  const scheduledDate = new Date(webinar.date);
+  const now = new Date();
+  const offsetSeconds = Math.floor(
+    (now.getTime() - scheduledDate.getTime()) / 1000
+  );
+  const isLate = offsetSeconds > 0;
+
+  let vimeoUrl = webinar.vimeoLink + "&autoplay=1&controls=0&muted=0";
+  if (isLate) {
+    vimeoUrl += `#t=${offsetSeconds}s`;
+  }
+
   return (
     <section className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 py-6">
@@ -351,7 +363,7 @@ export const WebinarLive: React.FC<WebinarLiveProps> = ({
                 {videoId && (
                   <iframe
                     ref={iframeRef}
-                    src={`${webinar.vimeoLink}&autoplay=1&controls=0&muted=0`}
+                    src={vimeoUrl}
                     width="100%"
                     height="400"
                     frameBorder="0"
