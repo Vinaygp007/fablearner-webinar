@@ -16,7 +16,7 @@ export default function Home() {
       {/* Hero */}
       <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-10 max-w-2xl w-full text-center flex flex-col items-center">
         <h1 className="text-4xl sm:text-5xl font-dingdong font-bold text-pink-600/50 mb-4 leading-tight">
-          Unlock Your Child's{" "}
+          Unlock Your Child&#39;s{" "}
           <span className="text-yellow-400">Reading Superpower</span>
         </h1>
         <p className="text-lg sm:text-xl text-pink-700 mb-6 font-andika">
@@ -66,7 +66,7 @@ export default function Home() {
               <span className="font-bold text-yellow-400">resources</span>
             </li>
             <li>
-              📈 Track your child's{" "}
+              📈 Track your child&#39;s{" "}
               <span className="font-bold text-pink-700">reading progress</span>
             </li>
           </ul>
