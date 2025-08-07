@@ -77,6 +77,7 @@ export default function WebinarPage(): JSX.Element {
   const [userToken, setUserToken] = useState<string>("");
   const [webinarId, setWebinarId] = useState<string>("");
   const [scheduledISTTime, setScheduledISTTime] = useState<Date | null>(null);
+  const [userId, setUserId] = useState<string>("");
 
   // Extract token and wid from URL
   useEffect(() => {
@@ -109,17 +110,23 @@ export default function WebinarPage(): JSX.Element {
         const w = { id: webinarSnap.id, ...webinarSnap.data() } as WebinarData;
         // Check token
         let validToken = false;
+        let foundUserId = "";
         if (w.userLinks && Array.isArray(w.userLinks)) {
-          validToken = w.userLinks.some(
+          const found = w.userLinks.find(
             (link: UserLink) => link.token === userToken
           );
+          validToken = !!found;
+          if (found) foundUserId = found.userId;
         } else if (w.userLinks && typeof w.userLinks === "object") {
-          validToken = Object.values(w.userLinks).some(
+          const found = Object.values(w.userLinks).find(
             (link: any) => link.token === userToken
           );
+          validToken = !!found;
+          if (found) foundUserId = (found as UserLink).userId;
         }
         setIsValidToken(validToken);
         setWebinar(w);
+        setUserId(foundUserId);
         // Determine scheduled IST time
         let scheduledDate: Date;
         if (w.scheduleType === "custom" && w.date) {
@@ -289,6 +296,122 @@ export default function WebinarPage(): JSX.Element {
     }
   };
 
+  /**
+   * Store user response in the "response" subcollection within the "webinar" collection
+   *
+   * @param questionId - Unique identifier for the question
+   * @param questionType - Type of question (text, mcq, etc.)
+   * @param response - User's response text
+   * @param timestamp - Video timestamp when response was submitted
+   * @returns Promise with success status and optional error message
+   *
+   * Example usage:
+   * const result = await handleResponse({
+   *   questionId: "q1",
+   *   questionType: "text",
+   *   response: "My answer here",
+   *   timestamp: "00:05:30"
+   * });
+   *
+   * if (result.success) {
+   *   console.log("Response saved successfully");
+   * } else {
+   *   console.error("Error:", result.error);
+   * }
+   */
+  const handleResponse = async ({
+    questionId,
+    questionType,
+    response,
+    timestamp,
+  }: {
+    questionId: string;
+    questionType: string;
+    response: string;
+    timestamp: string;
+  }): Promise<{ success: boolean; error?: string }> => {
+    // Validation
+    if (!webinar) {
+      return { success: false, error: "Webinar not found" };
+    }
+    if (!userId) {
+      return { success: false, error: "User ID not found" };
+    }
+    if (!userName) {
+      return { success: false, error: "User name not found" };
+    }
+    if (!questionId) {
+      return { success: false, error: "Question ID is required" };
+    }
+    if (!response || response.trim() === "") {
+      return { success: false, error: "Response cannot be empty" };
+    }
+    if (!timestamp) {
+      return { success: false, error: "Timestamp is required" };
+    }
+
+    try {
+      const responseRef = collection(db, "webinar", webinar.id, "response");
+
+      // Create response document with additional metadata
+      const responseData = {
+        userId,
+        userName,
+        questionId,
+        questionType: questionType || "text",
+        response: response.trim(),
+        timestamp,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        webinarId: webinar.id,
+        webinarTitle: webinar.title,
+      };
+
+      const docRef = await addDoc(responseRef, responseData);
+
+      console.log("Response saved successfully:", {
+        docId: docRef.id,
+        questionId,
+        response: responseData.response.substring(0, 50) + "...",
+      });
+
+      return { success: true };
+    } catch (err) {
+      console.error("Error saving response:", err);
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Unknown error occurred",
+      };
+    }
+  };
+
+  // Function to retrieve responses from the response subcollection
+  const getResponses = async (questionId?: string): Promise<any[]> => {
+    if (!webinar) return [];
+
+    try {
+      const responseRef = collection(db, "webinar", webinar.id, "response");
+      let q = query(responseRef, orderBy("createdAt", "desc"));
+
+      if (questionId) {
+        q = query(
+          responseRef,
+          where("questionId", "==", questionId),
+          orderBy("createdAt", "desc")
+        );
+      }
+
+      const snapshot = await getDocs(q);
+      return snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+    } catch (err) {
+      console.error("Error fetching responses:", err);
+      return [];
+    }
+  };
+
   // Update allComments when comments or pendingComments change
   useEffect(() => {
     const combined = [...comments, ...pendingComments];
@@ -327,6 +450,29 @@ export default function WebinarPage(): JSX.Element {
         ...doc.data(),
       })) as Comment[];
       setComments(commentsData);
+    });
+
+    return () => unsubscribe();
+  }, [webinar, isValidToken]);
+
+  // Real-time responses listener (optional - for admin dashboard)
+  useEffect(() => {
+    if (!webinar || !isValidToken) return;
+
+    const responsesRef = collection(db, "webinar", webinar.id, "response");
+    const q = query(responsesRef, orderBy("createdAt", "desc"));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const responsesData = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      console.log(
+        "Real-time responses update:",
+        responsesData.length,
+        "responses"
+      );
+      // You can store this in state if needed for admin dashboard
     });
 
     return () => unsubscribe();
@@ -384,6 +530,8 @@ export default function WebinarPage(): JSX.Element {
         setUserName={setUserName}
         handleSendComment={handleSendComment}
         formatISTDateTime={() => formatISTDateTime(scheduledISTTime)}
+        handleResponse={handleResponse}
+        userId={userId}
       />
     );
   }
